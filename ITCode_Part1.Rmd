@@ -1,0 +1,57 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+# A simple visualisation of the number of points evolution
+library(ggplot2)
+x = 50 # Initial price
+t = 1 # Time
+M = 4 # Number of points 
+L = 3 # Level
+b = 0.1 # Drift
+s = 0.2 # Volatility
+Date = (1:(M^3))/M^3*t # Vector of dates
+
+#Initialize trajectories for each level
+x0 = rep(NA, M^3) 
+x0[1] = x
+x1 = rep(NA, M^3)
+x1[1] = x
+x2 = rep(NA, M^3)
+x2[1] = x
+x3 = rep(NA, M^3)
+x3[1] = x
+dataGraph0 = data.frame(Date, x0)
+dataGraph1 = data.frame(Date, x1)
+dataGraph2 = data.frame(Date, x2)
+dataGraph3 = data.frame(Date, x3)
+for(i in 1:M^L){
+  x = x * (1 + b*t/M^L + s*sqrt(t/M^L)*rnorm(1))
+  print(i*t/M^L)
+  print(which(dataGraph3$Date == i*t/M^L))
+  dataGraph3[which(dataGraph3$Date == i*t/M^L), 2] = x
+  if(i%%M == 0){
+    dataGraph2[which(dataGraph2$Date == i*t/M^L), 2] = x
+  }
+  if(i%%M^2 == 0){
+    dataGraph1[which(dataGraph1$Date == i*t/M^L), 2] = x
+  }
+  if(i%%M^3 == 0){
+    dataGraph0[which(dataGraph0$Date == i*t/M^L), 2] = x
+  }
+}
+
+dataGraph0 = na.omit(dataGraph0)
+dataGraph1 = na.omit(dataGraph1)
+dataGraph2 = na.omit(dataGraph2)
+dataGraph3 = na.omit(dataGraph3)
+dataGraph3[1,2] = 50
+
+ggplot(data = dataGraph0, aes(x = Date)) + geom_line(aes(y = x0)) + ggtitle("Level 0 : M^0 + 1 = 2 points") + theme(plot.title = element_text(color = "black", size = 11, face = "bold", hjust = 0.5)) + labs(x = "Time", y = "Stock Value") + ylim(35, 65)
+ggplot(data = dataGraph1, aes(x = Date)) + geom_line(aes(y = x1)) + ggtitle("Level 1 : M^1 + 1 = 5 points") + theme(plot.title = element_text(color = "black", size = 11, face = "bold", hjust = 0.5)) + labs(x = "Time", y = "Stock Value") + ylim(35, 65)
+ggplot(data = dataGraph2, aes(x = Date)) + geom_line(aes(y = x2)) + ggtitle("Level 2 : M^2 + 1 = 17 points") + theme(plot.title = element_text(color = "black", size = 11, face = "bold", hjust = 0.5)) + labs(x = "Time", y = "Stock Value") + ylim(35, 65)
+ggplot(data = dataGraph3, aes(x = Date)) + geom_line(aes(y = x3)) + ggtitle("Level 3 : M^3 + 1 = 65 points") + theme(plot.title = element_text(color = "black", size = 11, face = "bold", hjust = 0.5)) + labs(x = "Time", y = "Stock Value") + ylim(35, 65)
+```
+

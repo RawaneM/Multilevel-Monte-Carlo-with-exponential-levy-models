@@ -1,0 +1,197 @@
+---
+title: "IT Project Part 2"
+output: html_notebook
+---
+
+```{r}
+#Level l estimator
+mlmc_l = function(M, l, N){
+  Time = 1
+  r = 0.05
+  sig = 0.2
+  nf = M^l
+  nc = nf/M
+  hf = Time/nf
+  hc = Time/nc
+  Result = rep(0, 4)
+  
+  for(N1 in seq(1, N, by = 10000)){
+    N2 = min(10000,N-N1+1)
+    X0 = 1
+    Xf = X0*rep(1, N2)
+    Xc = Xf
+    Af = 0.5*hf*Xf
+    Ac = 0.5*hc*Xc
+    if(l == 0){
+      dWf = sqrt(hf)*rnorm(N2, mean = 0, sd = 1)
+      Xf = Xf + r*Xf*hf + sig*Xf*dWf
+      Af = Af + 0.5*hf*Xf
+    } else {
+      for(n in 1:nc){
+        dWc = rep(0,N2)
+        for(m in 1:M){
+          dWf = sqrt(hf)*rnorm(N2, mean = 0, sd = 1)
+          dWc = dWc + dWf
+          Xf = Xf + r*Xf*hf + sig*Xf*dWf
+          Af = Af + hf*Xf
+        }
+        Xc = Xc + r*Xc*hc + sig*Xc*dWc
+        Ac = Ac + hc*Xc
+      }
+      Af = Af - 0.5*hf*Xf
+      Ac = Ac - 0.5*hc*Xc
+    }
+    Pf = pmax(0, Af - 1)
+    Pc = pmax(0, Ac - 1)
+    Pf = exp(-r*Time)*Pf
+    Pc = exp(-r*Time)*Pc
+    
+    if(l == 0){
+      Pc = 0
+    }
+    
+    Result[1] = Result[1] + sum(Pf-Pc)
+    Result[2] = Result[2] + sum((Pf-Pc)^2)
+    Result[3] = Result[3] + sum(Pf)
+    Result[4] = Result[4] + sum(Pf^2)
+  }
+  return(Result)
+}
+
+#MultiLevel MonteCarlo path estimation
+mlmc = function(M, eps, extrap){
+  
+  L = -1
+  N = 10000
+  converged = 0
+  suml = matrix(nrow = 3, ncol = 0)
+  
+  while(converged == 0){
+    
+    #Initial Variance Estimate
+    L = L+1
+    sums = mlmc_l(M, L, N)
+    suml = cbind(suml, rep(0, nrow(suml)))
+    suml[1, L+1] = N
+    suml[2, L+1] = sums[1]
+    suml[3, L+1] = sums[2]
+    
+    #Optimal sample size
+    Vl = suml[3,]/suml[1,] - (suml[2,]/suml[1,])^2
+    Nl = ceiling(2*sqrt(Vl/M^(0:L)) * sum(sqrt(Vl*M^(0:L)))/eps^2)
+    
+    #Update sample sums
+    for(l in 0:L){
+      dNl = Nl[l+1] - suml[1, l+1]
+      if(dNl > 0){
+        sums = mlmc_l(M, l , dNl)
+        suml[1, l+1] = suml[1, l+1] + dNl
+        suml[2, l+1] = suml[2, l+1] + sums[1]
+        suml[3, l+1] = suml[3, l+1] + sums[2]
+      }
+    }
+    
+    #Convergence Tests
+    if(extrap != 0){
+      range = 0
+      if(L>1 & M^L>=16){
+        con = M^range*(suml[2, L+1+range]/suml[1, L+1+range] - (1/M)*suml[2, L+range]/suml[1, L+range])
+        converged = ifelse(max(abs(con)) < (M^2-1)*eps/sqrt(2) | M^L > 1024, 1, 0)
+      }
+    } else {
+      range = c(-1, 0)
+      if(L>1 & M^L>=16){
+        con = M^range*suml[2, L+1+range]/suml[1, L+1+range]
+        converged  = ifelse((max(abs(con)) < (M-1)*eps/sqrt(2)) | (M^L > 1024), 1, 0)
+      }
+    }
+  }
+  P = sum(suml[2, 1:L+1]/suml[1, 1:L+1])
+  if(extrap != 0){
+    P = P + suml[2, L+1]/suml[1, L+1]/(M-1)
+  }
+  
+  Result = list("P" = P, "Nl" = Nl)
+  return(Result)
+}
+
+```
+
+
+```{r}
+#Geometric Brownian Motion with Asian Option
+library(ggplot2)
+library(scales)
+N = 2000000
+M = 4
+L = seq(0,4)
+del1 = c()
+del2 = c()
+var1 = c()
+var2 = c()
+
+#Convergence Tests
+for(l in L){
+  cat('Step', l, "\n")
+  sums = mlmc_l(M, l, N)
+  del1 = c(del1, sums[3]/N)
+  del2 = c(del2, sums[1]/N)
+  var1 = c(var1, sums[4]/N - (sums[3]/N)^2)
+  var2 = c(var2, sums[2]/N - (sums[1]/N)^2)
+}
+
+var2[1] = NA
+del2[1] = NA
+del3 = c(NA, NA, del2[3:length(del2)] - del2[2:(length(del2)-1)]/M)
+dataGraph12 = data.frame(L, del1, var1, var2, del2, del3)
+
+#Graph log variance with respect to Level
+ggplot(data = dataGraph12, aes(x = L)) + geom_line(aes(y = log(var2)/log(M), colour = "black"), size = 1) + geom_point(aes(y = log(var2)/log(M))) + geom_line(aes(y = log(var1)/log(M), colour = "red"), size = 1) + geom_point(aes(y = log(var1)/log(M))) + ggtitle("The Log Variance with respect to the Level") + theme(plot.title = element_text(color = "black", size = 11, face = "bold", hjust = 0.5)) + labs(x = "Level l", y = "Log Variance") + scale_color_discrete(name = "Y series", labels = c("P(l)-P(l-1)", "P(l)")) + xlim(0,4) + ylim(-10,0)
+
+#Graph log mean with respect to level
+ggplot(data = dataGraph12, aes(x = L)) + geom_line(aes(y = log(abs(del1))/log(M), color = "black"), size = 1) + geom_point(aes(y = log(abs(del1))/log(M))) + geom_line(aes(y = log(abs(del2))/log(M), color = "red"), size = 1) + geom_point(aes(y = log(abs(del2))/log(M))) + 
+  geom_line(aes(y = log(abs(del3))/log(M), color = "green"), size = 1) + geom_point(y = log(abs(del3))/log(M)) + ggtitle("The Log Mean with respect to the Level") + theme(plot.title = element_text(color = "black", size = 11, face = "bold", hjust = 0.5)) + labs(x = "Level l", y = "Log Mean") + 
+  scale_color_discrete(name = "Y series", labels = c("P(l)", "Y(l)-Y(l-1)", "P(l)-P(l-1)")) + xlim(0,4) + ylim(-12,0)
+
+#Complexity tests
+Eps = c(0.001, 0.0005, 0.0002, 0.0001, 0.00005)
+maxl = 0
+mlmc_cost = matrix(nrow = length(Eps), ncol = 2)
+std_cost = matrix(nrow = length(Eps), ncol = 2)
+Nls = c()
+for(extrap in 0:1){
+  for(i in 1:length(Eps)){
+    eps = Eps[i]
+    res = mlmc(M, eps, extrap)
+    l = length(res$Nl) - 1
+    maxl = max(maxl, l)
+    mlmc_cost[i, extrap+1] = (1+1/M)*sum(res$Nl*M^(0:l))
+    std_cost[i, extrap+1] = sum((2*var1[(0:l)+1]/eps^2)*M^(0:l))
+    Nls = c(Nls, list(res$Nl))
+  }
+}
+
+List3 = list(L, Nls[[5]], Nls[[4]], Nls[[3]], Nls[[2]], Nls[[1]])
+List3 = lapply(List3, `length<-`, max(lengths(List3)))
+dataGraph3 = data.frame(List3)
+colnames(dataGraph3) = c('L', 'd5', 'd4', 'd3', 'd2', 'd1')
+
+#Graph of Number of Paths with respect to Level
+ggplot(dataGraph3, aes(x = L)) + geom_line(aes(y = d5, color = "black"), size = 1) + geom_point(aes(y=d5)) + geom_line(aes(y = d4, color = "green"), size = 1) + geom_point(aes(y = d4)) + geom_line(aes(y = d3, color = "red"), size = 1) + geom_point(aes(y = d3)) + geom_line(aes(y = d2, color = "blue"), size = 1) + geom_point(aes(y = d2)) + geom_line(aes(y = d1, color = "pink"), size = 1) + geom_point(aes(y=d1)) + scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),labels = trans_format("log10", math_format(10^.x))) + ggtitle("Evolution of number of path with respect to the Level") + theme(plot.title = element_text(color = "black", size = 11, face = "bold", hjust = 0.5)) + labs(x = "Level l", y = "Nl") + xlim(0,4) + scale_color_discrete(name="Y series", labels = c("Eps = 0.00005", "Eps = 0.0005", "Eps = 0.0001", "Eps = 0.001", "Eps = 0.0002"))
+
+Std1 = Eps^2*std_cost[,1]
+Std2 = Eps^2*std_cost[,2]
+MC1 = Eps^2*mlmc_cost[,1]
+MC2 = Eps^2*mlmc_cost[,2]
+dataGraph4 = data.frame(Eps, Std1, Std2, MC1, MC2)
+
+#Graph of complexity with respect to accuracy
+ggplot(dataGraph4, aes(x = Eps)) + geom_line(aes(y = Std1, color = "black"), size = 1) + geom_point(aes(y = Std1)) + geom_line(aes(y = Std2, color = "red"), size = 1) + geom_point(aes(y = Std2)) + geom_line(aes(y = MC1, color = "green"), size = 1) + geom_point(aes(y = MC1)) + geom_line(aes(y = MC2, color = "blue"), size = 1) + geom_point(aes(y = MC2)) +
+  scale_x_log10(breaks = trans_breaks("log10", function(x) 10^x),labels = trans_format("log10", math_format(10^.x))) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),labels = trans_format("log10", math_format(10^.x))) + 
+  ggtitle("Complexity with respect to the Accuracy") + theme(plot.title = element_text(color = "black", size = 11, face = "bold", hjust = 0.5)) +
+  scale_color_discrete(name="Y series", labels = c("Std MC", "MLMC ext", "MLMC", "Std MC ext"))
+  
+```
+
+

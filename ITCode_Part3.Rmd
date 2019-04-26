@@ -1,0 +1,252 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+#Multilevel for Asian Option with Variance Gamma Process
+eps = 0.005            # Sought precision for RMSE
+Y = 1000               # Initialisation of Y
+Y_new = 0              # Iteration Y update
+M = 2                  # M parameter
+t = 1                  # Time to maturity
+h = t/M                # First time-step
+N_base = M^14          # Base number of trajectories = 16384
+S = 100
+K = 100
+theta = -0.1436
+sigma = 0.1213
+k = 0.1686
+r = 0.05
+m = r + (1/k)*log(1 + theta*k - 0.5*sigma^2*k)
+gamma = rgamma(N_base, shape = t/k, scale = k)
+normal = rnorm(N_base)
+sim = S*exp(m*t + theta*gamma + sigma*sqrt(gamma)*normal)
+pay = pmax((sim+S)/2 - K, 0)
+C = mean(pay)
+V = 0
+l = 1
+N = N_base
+price <- c()
+while(max(abs(Y)/M,abs(Y_new)) > eps*(M-1)/sqrt(2) & l < 12){
+  print(paste("Step n?", l, sep = ""))                          # Print stage number
+  gamma = matrix(rgamma(M^l*N_base, shape = t/M^l/k, scale = k), nrow = M^l, ncol = N_base)
+  normal = matrix(rnorm(M^l*N_base), nrow = M^l, ncol = N_base)
+  sim = m*t/M^l + theta*gamma + sigma*sqrt(gamma)*normal
+  sim = S * exp(apply(sim, 2, cumsum))
+  p1 <- pmax(apply(sim,2,mean)-K,0)
+  if(l>1){
+    p0 = pmax(apply(sim[M*(1:(M^(l-1))),],2,mean)-K,0)
+  } else {
+    p0 = pmax((sim[M,]+S)/2-K,0)
+  }
+  h[l] <- t/(M^l)
+  V[l] <- var(p1-p0)
+  N[l] <- ceiling(2/eps^2*sqrt(V[l]*h[l])*sum(sqrt(V/h)))
+  if(N[l] >= N_base){
+    gamma2 = matrix(rgamma(M^l*(N[l]-N_base), shape = t/M^l/k, scale = k), nrow = M^l, ncol = N_base)
+    normal2 = matrix(rnorm(M^l*(N[l]-N_base)), nrow = M^l, ncol = N_base)
+    sim2 = m*t/M^l + theta*gamma2 + sigma*sqrt(gamma2)*normal2
+    sim2 = S*exp(apply(sim2, 2, cumsum))
+    sim = cbind(sim, sim2)
+  }
+  p1 = pmax(apply(sim,2,mean)-K,0)
+  if(l>1){
+    p0 = pmax(apply(sim[M*(1:(M^(l-1))),],2,mean)-K,0)
+  } else {
+    p0 <- pmax((sim[M,]+S)/2-K,0)
+  }
+  Y <- Y_new                  # Update
+  Y_new <- mean(p1)-mean(p0)  # Update
+  C <- C + Y_new              # Update price
+  price[l] <- C
+  l <- l + 1                  # Increment stage
+}
+asian_price <- C * exp(-r*t)
+MLMC_price <- price * exp(-r*t)
+MLMC_level <- seq(1,l-1,1)
+Montecarlo_price <-4.48 ; Montecarlo_price <- matrix(Montecarlo_price, 1, length(MLMC_level))
+convergence <- data.frame(Montecarlo_price, MLMC_level, MLMC_price)
+plot(MLMC_level, MLMC_price)
+plot(MLMC_level, V)
+plot(MLMC_level, N)
+```
+
+
+```{r}
+#Classical Monte Carlo for Variance Gamma
+PayoffVG = function(numberSimu, S0, Time, deltaT, typeProduct, K, r, Barrier){
+  numberPoints = Time/deltaT
+  sigma = 0.1213
+  theta = -0.1436
+  kv = 0.1686
+  m = r + (1/kv)*log(1+theta*kv-0.5*sigma^2*kv)
+  Payoff = 0
+  for(i in 1:numberSimu){
+    Indicator = 1
+    St = S0
+    X0 = 0
+    Xt = X0
+    sumAsian = St
+    for(j in 1:numberPoints){
+      G = rgamma(1, shape = deltaT/kv, scale = kv)
+      N = rnorm(1, mean = 0, sd = 1)
+      Xt = Xt + m*deltaT + theta*G + sigma*sqrt(G)*N
+      St = S0*exp(Xt)
+      sumAsian = sumAsian + St
+      if(St>Barrier & typeProduct == 'BarrierOption'){
+        Indicator = 0
+        break
+      }
+    }
+    if(typeProduct == 'AsianOption'){
+      Payoff = Payoff + max(0, sumAsian/numberPoints - K)
+    }
+    if(typeProduct == 'BarrierOption'){
+      Payoff = Payoff + Indicator*max(0, St - K)
+    }
+  }
+  Payoff = Payoff/numberSimu
+  return(exp(-r*Time)*Payoff)
+}
+
+numberSimu = 25000
+S0 = 100
+Time = 1
+deltaT = 0.005
+typeProduct = 'AsianOption'
+K = 100
+r = 0.05
+Barrier = 65
+Result = PayoffVG(numberSimu, S0, Time, deltaT, typeProduct, K, r, Barrier)
+print(Result)
+```
+
+```{r}
+#Classical Monte Carlo for Normal Inverse Gaussian Process
+library(SafeBayes)
+PayoffNIG = function(numberSimu, S0, Time, deltaT, typeProduct, K, r, Barrier){
+  numberPoints = Time/deltaT
+  sigma = 0.13
+  theta = -0.1313
+  kv = 15.5
+  A = theta/sigma^2
+  B = sqrt(theta^2+(sigma^2)/kv)/sigma^2
+  C = sqrt(theta^2+2*(sigma^2)/kv)/(2*pi*sigma*sqrt(kv))
+  m = r - (1/kv) + pi*C*B*(1/kv)*sqrt(B^2-(A+1)^2)
+  Payoff = 0
+  for(i in 1:numberSimu){
+    Indicator = 1
+    St = S0
+    X0 = 0
+    Xt = X0
+    sumAsian = St
+    for(j in 1:numberPoints){
+      I = rinvGauss(1, 1/kv, 1)
+      N = rnorm(1, mean = 0, sd = 1)
+      Xt = Xt + m*deltaT + theta*I + sigma*sqrt(I)*N
+      St = S0*exp(Xt)
+      sumAsian = sumAsian + St
+      if(St>Barrier & typeProduct == 'BarrierOption'){
+        Indicator = 0
+        break
+      }
+    }
+    if(typeProduct == 'AsianOption'){
+      Payoff = Payoff + max(0, sumAsian/numberPoints - K)
+    }
+    if(typeProduct == 'BarrierOption'){
+      Payoff = Payoff + Indicator*max(0, St - K)
+    }
+  }
+  Payoff = Payoff/numberSimu
+  return(exp(-r*Time)*Payoff)
+}
+
+#MonteCarlo for NIG with Barrier Option
+numberSimu = 25000
+S0 = 100
+Time = 1
+deltaT = 0.005
+typeProduct = 'BarrierOption'
+K = 100
+r = 0.05
+Barrier = 125
+Result = PayoffNIG(numberSimu, S0, Time, deltaT, typeProduct, K, r, Barrier)
+print(Result)
+```
+
+```{r}
+#Multilevel for Barrier Option with Normal Inverse Gaussian
+library(SafeBayes)
+eps = 0.005            # Sought precision for RMSE
+Y = 1000               # Initialisation of Y
+Y_new = 0              # Iteration Y update
+M = 2                  # M parameter
+t = 1                  # Time to maturity
+h = t/M                # First time-step
+N_base = M^14          # Base number of trajectories = 16384
+S = 100
+K = 100
+theta = -0.1313
+sigma = 0.1836
+k = 15.5
+r = 0.05
+Barrier = 115
+A = theta/sigma^2
+B = sqrt(theta^2+(sigma^2)/k)/sigma^2
+C = sqrt(theta^2+2*(sigma^2)/k)/(2*pi*sigma*sqrt(k))
+m = r - (1/k) + pi*C*B*(1/k)*sqrt(B^2-(A+1)^2)
+inverse = rinvGauss(N_base, 1/k, 1)
+normal = rnorm(N_base)
+sim = S*exp(m*t + theta*inverse + sigma*sqrt(inverse)*normal)
+condition = ifelse(sim < B, 1, 0)
+pay = pmax((sim - K)*condition, 0)
+C = mean(pay)
+V = 0
+l = 1
+N = N_base
+
+while(max(abs(Y)/M,abs(Y_new)) > eps*(M-1)/sqrt(2) & l < 12){
+  print(paste("Step n?", l, sep = ""))                          # Print stage number
+  inverse = matrix(rinvGauss(M^l*N_base, 1/k, k), nrow = M^l, ncol = N_base)
+  normal = matrix(rnorm(M^l*N_base), nrow = M^l, ncol = N_base)
+  sim = m*t/M^l + theta*inverse + sigma*sqrt(inverse)*normal
+  sim = S * exp(apply(sim, 2, cumsum))
+  condition = ifelse(apply(sim, 2, max) < B, 1, 0)
+  p1 = pmax((sim[nrow(a),]-K)*condition, 0)
+  if(l>1){
+    condition = ifelse(apply(sim[M*(1:(M^(l-1))),], 2, max)< B, 1,0)
+    p0 = pmax((sim[nrow(a),]-K)*condition, 0)
+  } else {
+    condition = ifelse(sim < B, 1, 0)
+    p0 = pmax((sim - K)*condition, 0)
+  }
+  h[l] <- t/(M^l)
+  V[l] <- var(p1-p0)
+  N[l] <- ceiling(2/eps^2*sqrt(V[l]*h[l])*sum(sqrt(V/h)))
+  if(N[l] >= N_base){
+    inverse2 = matrix(rinvGauss(M^l*(N[l]-N_base), 1/k, 1), nrow = M^l, ncol = N[l]-N_base)
+    normal2 = matrix(rnorm(M^l*(N[l]-N_base)), nrow = M^l, ncol = N[l]-Nbase)
+    sim2 = m*t/M^l + theta*inverse2 + sigma*sqrt(inverse2)*normal2
+    sim2 = S*exp(apply(sim2, 2, cumsum))
+    condition2 = ifelse(apply(sim2, 2, max) < B, 1, 0)
+    sim = cbind(sim, sim2)
+    condition = cbind(condition, condition2)
+  }
+  p1 = pmax((sim[nrow(a),]-K)*condition, 0)
+  if(l>1){
+    condition = ifelse(apply(sim[M*(1:(M^(l-1))),], 2, max)< B, 1,0)
+    p0 = pmax((sim[nrow(a),]-K)*condition, 0)
+  } else {
+    condition = ifelse(sim < B, 1, 0)
+    p0 = pmax((sim - K)*condition, 0)
+  }
+  Y <- Y_new                  # Update
+  Y_new <- mean(p1)-mean(p0)  # Update
+  C <- C + Y_new              # Update price
+  l <- l + 1                  # Increment stage
+}
+C * exp(-r*t)
+```
+
